@@ -8,6 +8,7 @@ DEFAULT_CURRENCY=USD
 FLIGHTS_PROVIDER=skyscraper
 SKY_SCRAPER_API_KEY=your_rapidapi_key
 AIRPORTS_DATA_URL=https://raw.githubusercontent.com/mwgg/Airports/refs/heads/master/airports.json
+ALLOWED_HOSTS=localhost,127.0.0.1
 ```
 
 ## Running
