@@ -10,10 +10,15 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/6.0/ref/settings/
 """
 
+import os
 from pathlib import Path
+
+from dotenv import load_dotenv
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+load_dotenv(BASE_DIR / ".env", override=True)
 
 
 # Quick-start development settings - unsuitable for production
@@ -70,7 +75,14 @@ TEMPLATES = [
     },
 ]
 
-CORS_ALLOW_ALL_ORIGINS = True
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:5173",
+]
+
+DEFAULT_CURRENCY = os.getenv("DEFAULT_CURRENCY", "USD")
+FLIGHTS_PROVIDER = os.getenv("FLIGHTS_PROVIDER", "skyscraper")
+SKY_SCRAPER_API_KEY = os.getenv("SKY_SCRAPER_API_KEY", "")
+SKY_SCRAPER_MODE = "google"
 
 WSGI_APPLICATION = 'config.wsgi.application'
 
