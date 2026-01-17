@@ -9,6 +9,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts"
+import ShowChartIcon from "@mui/icons-material/ShowChart"
 import type { PricePoint } from "../lib/types"
 
 type PriceChartProps = {
@@ -124,7 +125,10 @@ export default function PriceChart({
     <div className="rounded-3xl border border-white/80 bg-white/80 p-4 shadow-lg shadow-orange-100 min-w-0">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <div>
-          <h3 className="text-base font-semibold text-slate-800">{headerTitle}</h3>
+          <h3 className="flex items-center gap-2 text-base font-semibold text-slate-800">
+            <ShowChartIcon fontSize="small" />
+            {headerTitle}
+          </h3>
           <p className="text-xs text-slate-400">
             {headerSubtext}
           </p>

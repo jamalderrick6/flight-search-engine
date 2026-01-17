@@ -1,4 +1,7 @@
 import { useEffect, useMemo, useState } from "react"
+import FilterAltIcon from "@mui/icons-material/FilterAlt"
+import FlightTakeoffIcon from "@mui/icons-material/FlightTakeoff"
+import FlightLandIcon from "@mui/icons-material/FlightLand"
 import SearchForm from "../components/SearchForm"
 import FiltersPanel from "../components/FiltersPanel"
 import PriceChart from "../components/PriceChart"
@@ -26,8 +29,8 @@ type SearchState = {
 }
 
 const initialSearch: SearchState = {
-  origin: "NYC",
-  destination: "NBO",
+  origin: "",
+  destination: "",
   departDate: todayIso,
   returnDate: null,
   adults: 1,
@@ -85,6 +88,18 @@ export default function Flights() {
     const controller = new AbortController()
     let isMounted = true
 
+    const originReady = debouncedParams.origin?.trim()
+    const destinationReady = debouncedParams.destination?.trim()
+    if (!originReady || !destinationReady) {
+      setIsLoading(false)
+      setError(null)
+      setResults(null)
+      return () => {
+        isMounted = false
+        controller.abort()
+      }
+    }
+
     async function run() {
       setIsLoading(true)
       setError(null)
@@ -141,6 +156,7 @@ export default function Flights() {
               className="rounded-full border border-slate-200 bg-white/80 px-4 py-2 text-xs font-semibold text-slate-600 sm:hidden"
               onClick={() => setFiltersOpen(true)}
             >
+              <FilterAltIcon fontSize="inherit" className="mr-2" />
               Filters
             </button>
           </div>
@@ -179,8 +195,10 @@ export default function Flights() {
                   : "no price range yet"}
               </span>
               <span className="rounded-full bg-white/70 px-3 py-1">
+                <FlightTakeoffIcon fontSize="inherit" className="mr-1" />
                 {results?.query.origin || "---"} →{" "}
                 {results?.query.destination || "---"}
+                <FlightLandIcon fontSize="inherit" className="ml-1" />
               </span>
             </div>
 

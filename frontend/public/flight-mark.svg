@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="wing" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#ff6b3d" />
+      <stop offset="100%" stop-color="#ff9b5f" />
+    </linearGradient>
+  </defs>
+  <rect width="128" height="128" rx="28" fill="#0f172a" />
+  <path
+    d="M20 76c0-5 4-9 9-9h28l20-26c3-4 8-6 13-6h18c3 0 4 4 2 6L90 69l21 7c5 2 7 7 5 12-2 4-7 6-12 4l-30-10H29c-5 0-9-4-9-9Z"
+    fill="url(#wing)"
+  />
+  <circle cx="94" cy="40" r="6" fill="#35c0b4" />
+</svg>
