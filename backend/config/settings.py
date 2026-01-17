@@ -76,7 +76,13 @@ TEMPLATES = [
 ]
 
 CORS_ALLOWED_ORIGINS = [
+    "https://flight-search-engine-two.vercel.app",
     "http://localhost:5173",
+]
+
+CSRF_TRUSTED_ORIGINS = [
+    "https://flight-search-engine-two.vercel.app",
+    "https://flight-search-engine-g71a.onrender.com",
 ]
 
 DEFAULT_CURRENCY = os.getenv("DEFAULT_CURRENCY", "USD")
