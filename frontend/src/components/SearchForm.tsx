@@ -6,7 +6,6 @@ import FlightLandIcon from "@mui/icons-material/FlightLand"
 import CalendarMonthIcon from "@mui/icons-material/CalendarMonth"
 import PeopleIcon from "@mui/icons-material/People"
 import AirlineSeatReclineNormalIcon from "@mui/icons-material/AirlineSeatReclineNormal"
-import CurrencyExchangeIcon from "@mui/icons-material/CurrencyExchange"
 import SearchIcon from "@mui/icons-material/Search"
 
 type SearchFormValues = {

@@ -14,6 +14,11 @@ type FiltersPanelProps = {
 }
 
 const limits = [25, 50, 75, 100]
+const sortOptions: Array<{ label: string; value: FiltersState["sort"] }> = [
+  { label: "Cheapest", value: "cheapest" },
+  { label: "Shortest", value: "shortest" },
+  { label: "Least stops", value: "least_stops" },
+]
 const stopOptions = [
   { label: "Any", value: null },
   { label: "Nonstop", value: 0 },
@@ -26,7 +31,10 @@ export default function FiltersPanel({
   onChange,
   airlines,
 }: FiltersPanelProps) {
-  const update = (key: keyof FiltersState, value: FiltersState[keyof FiltersState]) => {
+  const update = <Key extends keyof FiltersState>(
+    key: Key,
+    value: FiltersState[Key]
+  ) => {
     onChange({ ...filters, [key]: value })
   }
 
@@ -42,11 +50,7 @@ export default function FiltersPanel({
       <div>
         <p className="text-xs uppercase tracking-widest text-slate-500">Sort</p>
         <div className="mt-2 space-y-2 text-sm">
-          {[
-            { label: "Cheapest", value: "cheapest" },
-            { label: "Shortest", value: "shortest" },
-            { label: "Least stops", value: "least_stops" },
-          ].map((option) => (
+          {sortOptions.map((option) => (
             <label key={option.value} className="flex items-center gap-2">
               <input
                 type="radio"
