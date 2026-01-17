@@ -83,6 +83,10 @@ DEFAULT_CURRENCY = os.getenv("DEFAULT_CURRENCY", "USD")
 FLIGHTS_PROVIDER = os.getenv("FLIGHTS_PROVIDER", "skyscraper")
 SKY_SCRAPER_API_KEY = os.getenv("SKY_SCRAPER_API_KEY", "")
 SKY_SCRAPER_MODE = "google"
+AIRPORTS_DATA_URL = os.getenv(
+    "AIRPORTS_DATA_URL",
+    "https://raw.githubusercontent.com/mwgg/Airports/refs/heads/master/airports.json",
+)
 
 WSGI_APPLICATION = 'config.wsgi.application'
 

@@ -7,6 +7,7 @@ Create `backend/.env` with:
 DEFAULT_CURRENCY=USD
 FLIGHTS_PROVIDER=skyscraper
 SKY_SCRAPER_API_KEY=your_rapidapi_key
+AIRPORTS_DATA_URL=https://raw.githubusercontent.com/mwgg/Airports/refs/heads/master/airports.json
 ```
 
 ## Running
@@ -19,6 +20,7 @@ python manage.py runserver
 ## Endpoints
 - `GET /api/health`
 - `POST /api/flights/search`
+- `GET /api/places/autocomplete`
 
 ### Example: Health
 ```
@@ -30,7 +32,7 @@ curl http://localhost:8000/api/health
 curl -X POST http://localhost:8000/api/flights/search \
   -H "Content-Type: application/json" \
   -d '{
-    "origin": "NYCA",
+    "origin": "JFK",
     "destination": "NBO",
     "departDate": "2025-02-01",
     "returnDate": null,
@@ -44,8 +46,14 @@ curl -X POST http://localhost:8000/api/flights/search \
   }'
 ```
 
+### Example: Places autocomplete
+```
+curl "http://localhost:8000/api/places/autocomplete?q=nair&limit=8"
+```
+
 ## Notes
 - `origin`/`destination` accept 3-8 characters to support city/entity IDs (e.g., `NYCA`) or IATA airport codes.
 - The provider is selected via `FLIGHTS_PROVIDER`; current option is `skyscraper`.
 - Optional search filters: `sort` (`cheapest`, `shortest`, `least_stops`), `maxStops`, `limit`, `allowedAirlines`, `currency`.
 - Price graph is derived from offers when available, with a cached fallback to `search-everywhere`.
+- Autocomplete uses the Airports JSON dataset and caches by query for 1 hour (dataset cached for 24 hours).
