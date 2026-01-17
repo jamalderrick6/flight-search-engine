@@ -13,6 +13,9 @@ AIRPORTS_DATA_URL=https://raw.githubusercontent.com/mwgg/Airports/refs/heads/mas
 ## Running
 ```
 cd backend
+python -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
 python manage.py migrate
 python manage.py runserver
 ```
