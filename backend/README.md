@@ -35,10 +35,17 @@ curl -X POST http://localhost:8000/api/flights/search \
     "departDate": "2025-02-01",
     "returnDate": null,
     "adults": 1,
-    "cabin": "ECONOMY"
+    "cabin": "ECONOMY",
+    "currency": "USD",
+    "sort": "cheapest",
+    "maxStops": 1,
+    "limit": 50,
+    "allowedAirlines": ["KQ", "QR"]
   }'
 ```
 
 ## Notes
 - `origin`/`destination` accept 3-8 characters to support city/entity IDs (e.g., `NYCA`) or IATA airport codes.
 - The provider is selected via `FLIGHTS_PROVIDER`; current option is `skyscraper`.
+- Optional search filters: `sort` (`cheapest`, `shortest`, `least_stops`), `maxStops`, `limit`, `allowedAirlines`, `currency`.
+- Price graph is derived from offers when available, with a cached fallback to `search-everywhere`.

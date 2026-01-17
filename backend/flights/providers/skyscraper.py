@@ -1,4 +1,5 @@
 # /Users/wmonk/Documents/projects_repo/flight_search_engine/backend/flights/providers/skyscraper.py
+import logging
 import re
 import hashlib
 import json
@@ -8,8 +9,15 @@ from django.core.cache import cache
 
 from flights.providers.base import FlightProvider, ProviderError
 
+logger = logging.getLogger(__name__)
+
 # RapidAPI: flights-sky
+
 SKYSCRAPER_EVERYWHERE_URL = "https://flights-sky.p.rapidapi.com/flights/search-everywhere"
+
+# Google price graph endpoints (multi-day price series around the selected date)
+GOOGLE_PRICE_GRAPH_ONE_WAY_URL = "https://flights-sky.p.rapidapi.com/google/price-graph/for-one-way"
+GOOGLE_PRICE_GRAPH_ROUNDTRIP_URL = "https://flights-sky.p.rapidapi.com/google/price-graph/for-roundtrip"
 
 
 
@@ -96,10 +104,99 @@ def _build_headers(api_key: str) -> dict:
     }
 
 
+def _short_offer_id(vendor_id: str) -> str:
+    return "off_" + hashlib.sha1(vendor_id.encode()).hexdigest()[:12]
+
+
+def _compute_duration_minutes(segments):
+    total = 0
+    for s in segments:
+        total += s.get("durationMinutes", 0)
+    return total
+
+
+def _dedupe_offers(offers):
+    seen = {}
+    deduped = []
+
+    for o in offers:
+        key = (
+            o["price"]["total"],
+            o["stops"],
+            o["departAt"],
+            o["arriveAt"],
+            tuple(
+                (
+                    s["from"],
+                    s["to"],
+                    s["departAt"],
+                    s["arriveAt"],
+                    s["airline"],
+                )
+                for s in o["segments"]
+            ),
+        )
+
+        if key not in seen:
+            seen[key] = True
+            deduped.append(o)
+
+    return deduped
+
+
+def _sort_offers(offers, sort_by):
+    if sort_by == "cheapest":
+        return sorted(offers, key=lambda o: o["price"]["total"])
+    if sort_by == "shortest":
+        return sorted(offers, key=lambda o: o["durationMinutes"])
+    if sort_by == "least_stops":
+        return sorted(offers, key=lambda o: o["stops"])
+    return offers
+
+
+def _offer_depart_date(offer) -> str | None:
+    segments = offer.get("segments") or []
+    if not segments:
+        return None
+    depart_at = segments[0].get("departAt")
+    if not depart_at or not isinstance(depart_at, str):
+        return None
+    return depart_at.split("T")[0]
+
+
+def _build_offer_curve(offers) -> list[dict]:
+    price_by_date: dict[str, float] = {}
+    for offer in offers:
+        date_key = _offer_depart_date(offer)
+        if not date_key:
+            continue
+        price_total = offer.get("price", {}).get("total")
+        if not isinstance(price_total, (int, float)):
+            continue
+        prev = price_by_date.get(date_key)
+        if prev is None or price_total < prev:
+            price_by_date[date_key] = float(price_total)
+    return [{"date": d, "price": p} for d, p in sorted(price_by_date.items())]
+
+
+def _google_curve_cache_key(params: dict) -> str:
+    """Cache key for multi-day price curves.
+
+    Use airport ids (departureId/arrivalId) because Google endpoints are airport-based.
+    """
+    return (
+        "flights:skyscraper:google_curve:"
+        f"{params.get('departureId')}:{params.get('arrivalId')}:"
+        f"{params.get('departDate')}:{params.get('returnDate') or ''}:"
+        f"{params.get('currency') or ''}"
+    )
+
+
 def _request_json(url: str, *, query: dict, headers: dict, timeout: int = 25) -> dict:
     try:
         response = requests.get(url, params=query, headers=headers, timeout=timeout)
     except requests.RequestException as exc:
+        logger.exception("Sky-Scraper request failed.")
         raise ProviderError(
             "Sky-Scraper request failed.",
             status_code=502,
@@ -111,6 +208,10 @@ def _request_json(url: str, *, query: dict, headers: dict, timeout: int = 25) ->
             details = response.json()
         except ValueError:
             details = {"error": response.text}
+        logger.warning(
+            "Sky-Scraper error response",
+            extra={"status_code": response.status_code, "details": details},
+        )
         raise ProviderError(
             "Sky-Scraper returned an error.",
             status_code=response.status_code,
@@ -464,6 +565,44 @@ def _normalize_price_history_from_everywhere(payload: dict, query_params: dict) 
     return [{"date": d, "price": p} for d, p in sorted(price_by_date.items())]
 
 
+# --- Google price-graph normalization ---
+def _normalize_price_history_from_google_price_graph(payload: dict) -> list[dict]:
+    """Normalize google/price-graph responses into [{date, price}].
+
+    One-way returns: {"data": [{"departureDate": "YYYY-MM-DD", "price": 123}, ...]}
+    Roundtrip returns: {"data": [{"departureDate": "YYYY-MM-DD", "returnDate": "YYYY-MM-DD", "price": 123}, ...]}
+
+    We plot by departureDate; returnDate can be added later if needed.
+    """
+    root = _pick_root_obj(payload)
+    data = root.get("data") if isinstance(root, dict) else None
+    if not isinstance(data, list):
+        return []
+
+    out: list[dict] = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        d = item.get("departureDate")
+        p = item.get("price")
+        if not isinstance(d, str) or not d:
+            continue
+        if not isinstance(p, (int, float)):
+            continue
+        out.append({"date": d, "price": float(p)})
+
+    # Dedupe by date (keep lowest) and sort
+    by_date: dict[str, float] = {}
+    for row in out:
+        d = row["date"]
+        p = row["price"]
+        prev = by_date.get(d)
+        if prev is None or p < prev:
+            by_date[d] = p
+
+    return [{"date": d, "price": by_date[d]} for d in sorted(by_date.keys())]
+
+
 class SkyScraperProvider(FlightProvider):
     def search_flights(self, params: dict) -> dict:
         api_key = getattr(settings, "SKY_SCRAPER_API_KEY", None)
@@ -508,7 +647,10 @@ class SkyScraperProvider(FlightProvider):
         query_params["location"] = "US"
 
         # --- maxStops filter ---
+        # Support common client aliases: maxStops / max_stops
         max_stops = params.get("maxStops")
+        if max_stops is None:
+            max_stops = params.get("max_stops")
         try:
             max_stops = int(max_stops) if max_stops is not None else None
         except (TypeError, ValueError):
@@ -516,6 +658,8 @@ class SkyScraperProvider(FlightProvider):
 
         # --- allowedAirlines filter (comma-separated string or list) ---
         allowed_airlines = params.get("allowedAirlines")
+        if allowed_airlines is None:
+            allowed_airlines = params.get("allowed_airlines")
         if isinstance(allowed_airlines, str):
             allowed_airlines = [x.strip().upper() for x in allowed_airlines.split(",") if x.strip()]
         elif isinstance(allowed_airlines, list):
@@ -537,58 +681,16 @@ class SkyScraperProvider(FlightProvider):
         google_payload = _request_json(list_url, query=query_params, headers=headers)
         root = _pick_root_obj(google_payload)
         if root.get("status") is False:
+            logger.warning(
+                "Sky-Scraper google/flights status=false",
+                extra={"api_message": root.get("message"), "api_errors": root.get("errors")},
+            )
+            logger.warning("Sky-Scraper google/flights payload: %s", root)
             raise ProviderError(
                 "Sky-Scraper returned an error.",
                 status_code=502,
                 details={"message": root.get("message"), "errors": root.get("errors")},
             )
-
-        # 2) Insert helper functions for offer normalization and deduplication/sorting
-        def _short_offer_id(vendor_id: str) -> str:
-            return "off_" + hashlib.sha1(vendor_id.encode()).hexdigest()[:12]
-
-        def _compute_duration_minutes(segments):
-            total = 0
-            for s in segments:
-                total += s.get("durationMinutes", 0)
-            return total
-
-        def _dedupe_offers(offers):
-            seen = {}
-            deduped = []
-
-            for o in offers:
-                key = (
-                    o["price"]["total"],
-                    o["stops"],
-                    o["departAt"],
-                    o["arriveAt"],
-                    tuple(
-                        (
-                            s["from"],
-                            s["to"],
-                            s["departAt"],
-                            s["arriveAt"],
-                            s["airline"],
-                        )
-                        for s in o["segments"]
-                    ),
-                )
-
-                if key not in seen:
-                    seen[key] = True
-                    deduped.append(o)
-
-            return deduped
-
-        def _sort_offers(offers, sort_by):
-            if sort_by == "cheapest":
-                return sorted(offers, key=lambda o: o["price"]["total"])
-            if sort_by == "shortest":
-                return sorted(offers, key=lambda o: o["durationMinutes"])
-            if sort_by == "least_stops":
-                return sorted(offers, key=lambda o: o["stops"])
-            return offers
 
         # 3) Parse raw offers from provider response (Google Flights)
         # We'll use _iter_google_flights to get the list of raw offers
@@ -697,9 +799,16 @@ class SkyScraperProvider(FlightProvider):
                                 "durationMinutes": seg_dur,
                             })
             # 4) Compute normalized fields
+            # Defensive: if vendor response doesn't include segments, skip the offer when filtering is requested,
+            # otherwise we can incorrectly compute stops.
+            if not segments and (max_stops is not None or allowed_airlines_set is not None):
+                continue
+
             duration_minutes = _compute_duration_minutes(segments)
             stops = max(len(segments) - 1, 0)
+
             # --- ENFORCE maxStops ---
+            # Note: stops is derived from number of segments (connections). maxStops=0 => exactly one segment.
             if max_stops is not None and stops > max_stops:
                 continue
             # --- ENFORCE allowedAirlines ---
@@ -740,6 +849,8 @@ class SkyScraperProvider(FlightProvider):
             limit = 50
 
         limit = max(1, min(limit, 100))  # optional clamp
+        # Build curve before slicing so the graph doesn't collapse when limit is small.
+        offers_for_curve = offers
         offers = offers[:limit]
 
         # --- Recompute meta from FINAL returned offers (post-dedupe/sort/limit) ---
@@ -785,49 +896,128 @@ class SkyScraperProvider(FlightProvider):
             "stopsCounts": stops_counts,
             "priceHistory": [],
         }
+        # --- Price graph precedence (Option C) ---
+        # Primary: Google price-graph (multi-day series) for a real timeline.
+        # Secondary: offer-derived curve (responsive to filters) if it yields more than 1 point.
+        # Fallback: search-everywhere quote history.
 
-        # --- 2) Price graph: keep using search-everywhere (quote-based, best for priceHistory) ---
-        try:
-            from_entity = _to_everywhere_entity(params.get("origin"))
-            to_entity = _to_everywhere_entity(params.get("destination"))
+        departure_airport = _to_google_airport(params.get("origin"))
+        arrival_airport = _to_google_airport(params.get("destination"))
 
-            everywhere_query = {
-                "fromEntityId": from_entity,
-                "toEntityId": to_entity,
-                "type": "roundtrip" if params.get("returnDate") else "oneway",
+        curve_key = _google_curve_cache_key(
+            {
+                "departureId": departure_airport,
+                "arrivalId": arrival_airport,
+                "departDate": params.get("departDate"),
+                "returnDate": params.get("returnDate"),
+                "currency": params.get("currency"),
             }
-            if params.get("currency"):
-                everywhere_query["currency"] = params["currency"]
+        )
+        cached_curve = cache.get(curve_key)
 
-            if not everywhere_query["fromEntityId"] or not everywhere_query["toEntityId"]:
-                raise ProviderError("Missing entity ids for search-everywhere.")
+        # 1) Try Google price-graph (cached)
+        if isinstance(cached_curve, list) and cached_curve:
+            meta["priceHistory"] = cached_curve
+        else:
+            try:
+                graph_query = {
+                    "departureId": departure_airport,
+                    "arrivalId": arrival_airport,
+                    "departureDate": params.get("departDate"),
+                }
+                if params.get("currency"):
+                    graph_query["currency"] = params.get("currency")
 
-            everywhere_payload = _request_json(
-                SKYSCRAPER_EVERYWHERE_URL,
-                query=everywhere_query,
-                headers=headers,
-            )
+                if params.get("returnDate"):
+                    graph_query["arrivalDate"] = params.get("returnDate")
+                    graph_url = GOOGLE_PRICE_GRAPH_ROUNDTRIP_URL
+                else:
+                    graph_url = GOOGLE_PRICE_GRAPH_ONE_WAY_URL
 
-            price_history = _normalize_price_history_from_everywhere(
-                everywhere_payload,
-                params,
-            )
-            meta["priceHistory"] = price_history
+                graph_payload = _request_json(graph_url, query=graph_query, headers=headers)
+                graph_series = _normalize_price_history_from_google_price_graph(graph_payload)
 
-            graph_prices = [p["price"] for p in price_history if isinstance(p, dict) and isinstance(p.get("price"), (int, float))]
-            # Only fall back to graph min/max when we have no concrete offers.
-            if not offers and graph_prices:
-                meta["minPrice"] = min(graph_prices)
-                meta["maxPrice"] = max(graph_prices)
-        except ProviderError:
-            pass
+                if graph_series:
+                    meta["priceHistory"] = graph_series
+                    cache.set(curve_key, graph_series, timeout=60 * 15)
+            except ProviderError:
+                # Don't fail the whole request if graph fails
+                pass
 
-        # 8) Ensure the final response structure remains unchanged
+        # 2) Offer-derived curve (only if it provides a meaningful series)
+        offers_curve = _build_offer_curve(offers_for_curve)
+        if len(offers_curve) >= 2:
+            # Prefer offer-derived when it has real variance (feels "live" with filters)
+            meta["priceHistory"] = offers_curve
+
+        # 3) Fallback to search-everywhere if we still have no curve
+        if not meta["priceHistory"]:
+            try:
+                from_entity = _to_everywhere_entity(params.get("origin"))
+                to_entity = _to_everywhere_entity(params.get("destination"))
+
+                everywhere_query = {
+                    "fromEntityId": from_entity,
+                    "toEntityId": to_entity,
+                    "type": "roundtrip" if params.get("returnDate") else "oneway",
+                }
+                if params.get("currency"):
+                    everywhere_query["currency"] = params["currency"]
+
+                if not everywhere_query["fromEntityId"] or not everywhere_query["toEntityId"]:
+                    raise ProviderError("Missing entity ids for search-everywhere.")
+
+                everywhere_payload = _request_json(
+                    SKYSCRAPER_EVERYWHERE_URL,
+                    query=everywhere_query,
+                    headers=headers,
+                )
+
+                price_history = _normalize_price_history_from_everywhere(
+                    everywhere_payload,
+                    params,
+                )
+                meta["priceHistory"] = price_history
+
+                graph_prices = [
+                    p["price"]
+                    for p in price_history
+                    if isinstance(p, dict) and isinstance(p.get("price"), (int, float))
+                ]
+                # Only fall back to graph min/max when we have no concrete offers.
+                if not offers and graph_prices:
+                    meta["minPrice"] = min(graph_prices)
+                    meta["maxPrice"] = max(graph_prices)
+            except ProviderError:
+                pass
+
+        # --- Keep meta min/max in sync with the curve when it exists ---
+        curve_prices = [
+            p.get("price")
+            for p in (meta.get("priceHistory") or [])
+            if isinstance(p, dict) and isinstance(p.get("price"), (int, float))
+        ]
+        if curve_prices:
+            # Min/max from offers already represent filtered list; curve can represent broader timeline.
+            # Ensure we have sane values even when offers are empty.
+            if meta.get("minPrice") is None:
+                meta["minPrice"] = min(curve_prices)
+            if meta.get("maxPrice") is None:
+                meta["maxPrice"] = max(curve_prices)
         result = {
             "query": query,
             "offers": offers,
             "meta": meta,
         }
+        # Ensure stable ordering for charting
+        if isinstance(result.get("meta", {}).get("priceHistory"), list):
+            try:
+                result["meta"]["priceHistory"] = sorted(
+                    result["meta"]["priceHistory"],
+                    key=lambda x: x.get("date") if isinstance(x, dict) else "",
+                )
+            except Exception:
+                pass
         # Cache for a short time to smooth repeated UI queries.
         cache.set(ck, result, timeout=60 * 5)
         return result
