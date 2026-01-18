@@ -40,9 +40,16 @@ export const normalizeOffer = (offer: Offer) => {
 }
 
 export const normalizeMeta = (meta: FlightMeta) => {
+  const priceHistory = meta.priceHistory || []
   return {
     ...meta,
     airlines: normalizeAirlines(meta.airlines),
-    priceHistory: meta.priceHistory || [],
+    priceHistory,
+    priceHistorySource: meta.priceHistorySource || "none",
+    priceHistoryFilterAware: meta.priceHistoryFilterAware ?? false,
+    priceHistoryPoints: meta.priceHistoryPoints ?? priceHistory.length,
+    cached: meta.cached ?? false,
+    cacheAgeSeconds: meta.cacheAgeSeconds ?? null,
+    cacheTtlSeconds: meta.cacheTtlSeconds ?? null,
   }
 }

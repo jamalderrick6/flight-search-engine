@@ -10,12 +10,13 @@ import {
   YAxis,
 } from "recharts"
 import ShowChartIcon from "@mui/icons-material/ShowChart"
-import type { PricePoint } from "../lib/types"
+import type { FlightMeta, PricePoint } from "../lib/types"
 
 type PriceChartProps = {
   data: PricePoint[]
   isLoading: boolean
   selectedDate?: string | null
+  meta?: FlightMeta | null
 }
 
 const formatCurrency = (value: number, compact = true) => {
@@ -37,6 +38,7 @@ export default function PriceChart({
   data,
   isLoading,
   selectedDate,
+  meta,
 }: PriceChartProps) {
   const [showSkeleton, setShowSkeleton] = useState(isLoading)
 
@@ -55,6 +57,20 @@ export default function PriceChart({
       .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
   }, [data])
 
+  const priceHistoryPoints = meta?.priceHistoryPoints ?? series.length
+  const priceHistorySource = meta?.priceHistorySource ?? "none"
+  const priceHistoryFilterAware = meta?.priceHistoryFilterAware ?? false
+  const cached = meta?.cached ?? false
+  const cacheAgeSeconds = meta?.cacheAgeSeconds ?? null
+
+  const sourceLabelMap: Record<string, string> = {
+    offers: "Live prices (based on current results)",
+    google_price_graph: "Market trend (not filter-specific)",
+    search_everywhere: "Estimated trend (fallback)",
+    none: "No price history available",
+  }
+  const sourceLabel = sourceLabelMap[priceHistorySource] || sourceLabelMap.none
+
   if (showSkeleton) {
     return (
       <div className="rounded-3xl border border-white/80 bg-white/80 p-4 shadow-lg shadow-orange-100">
@@ -70,7 +86,14 @@ export default function PriceChart({
   if (series.length === 0) {
     return (
       <div className="rounded-3xl border border-dashed border-slate-200 bg-white/60 p-6 text-sm text-slate-400">
-        No price trend available for these filters.
+        <p className="text-xs uppercase tracking-widest text-slate-400">
+          {sourceLabel}
+        </p>
+        <p className="mt-2 text-sm text-slate-500">
+          {priceHistoryPoints < 2
+            ? "Not enough history to estimate a trend for these filters."
+            : "No price history available."}
+        </p>
       </div>
     )
   }
@@ -109,17 +132,34 @@ export default function PriceChart({
     return Number.isFinite(pct) ? pct : null
   })()
 
-  const showVolatility = hasTrend && volatilityPct !== null && volatilityPct >= 0.5
+  const showVolatility =
+    hasTrend &&
+    priceHistoryPoints >= 5 &&
+    volatilityPct !== null &&
+    volatilityPct >= 0.5 &&
+    (priceHistorySource === "offers" || priceHistorySource === "google_price_graph")
 
-  const headerTitle = hasTrend ? "Live price curve" : "Price on selected date"
+  const headerTitle = sourceLabel
   const headerTag = hasTrend ? "price trend" : "spot price"
 
   const pointsLabel = `${series.length} point${series.length === 1 ? "" : "s"}`
   const spanLabel = spanDays !== null ? `over ${spanDays} day${spanDays === 1 ? "" : "s"}` : ""
 
-  const headerSubtext = hasTrend
-    ? `Min ${formatCurrency(minPrice)} · Max ${formatCurrency(maxPrice)} · ${pointsLabel}${spanLabel ? ` (${spanLabel})` : ""}${showVolatility ? ` · Fluctuates ±${volatilityPct!.toFixed(0)}%` : ""}`
-    : `No trend available — showing best price for ${targetDate ? formatDateLabel(targetDate) : "the selected date"}.`
+  const headerSubtext =
+    priceHistoryPoints < 2
+      ? "Not enough history to estimate a trend for these filters."
+      : hasTrend
+        ? `Min ${formatCurrency(minPrice)} · Max ${formatCurrency(maxPrice)} · ${pointsLabel}${spanLabel ? ` (${spanLabel})` : ""}`
+        : `No trend available — showing best price for ${targetDate ? formatDateLabel(targetDate) : "the selected date"}.`
+
+  const volatilityNote = showVolatility
+    ? `Prices fluctuate ±${volatilityPct!.toFixed(0)}%${priceHistorySource === "google_price_graph" ? " (market-wide)." : "."}`
+    : null
+
+  const marketNote =
+    priceHistoryPoints >= 2 && !priceHistoryFilterAware && priceHistorySource !== "none"
+      ? "Trend is market-wide and doesn’t reflect filters like stops/airlines."
+      : null
 
   return (
     <div className="rounded-3xl border border-white/80 bg-white/80 p-4 shadow-lg shadow-orange-100 min-w-0">
@@ -132,6 +172,17 @@ export default function PriceChart({
           <p className="text-xs text-slate-400">
             {headerSubtext}
           </p>
+          {(volatilityNote || marketNote || (cached && cacheAgeSeconds !== null)) && (
+            <p className="mt-1 text-xs text-slate-400">
+              {volatilityNote}
+              {volatilityNote && marketNote ? " " : ""}
+              {marketNote}
+              {(volatilityNote || marketNote) && cached && cacheAgeSeconds !== null ? " · " : ""}
+              {cached && cacheAgeSeconds !== null
+                ? `Cached (updated ~${cacheAgeSeconds}s ago)`
+                : ""}
+            </p>
+          )}
         </div>
         <span className="text-xs uppercase tracking-widest text-slate-400">
           {headerTag}

@@ -41,6 +41,12 @@ export type FlightMeta = {
   airlines: Airline[] | string[]
   stopsCounts?: Record<string, number>
   priceHistory?: PricePoint[]
+  priceHistorySource?: "offers" | "google_price_graph" | "search_everywhere" | "none"
+  priceHistoryFilterAware?: boolean
+  priceHistoryPoints?: number
+  cached?: boolean
+  cacheAgeSeconds?: number | null
+  cacheTtlSeconds?: number | null
 }
 
 export type FlightSearchResponse = {
