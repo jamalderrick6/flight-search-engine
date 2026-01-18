@@ -41,6 +41,12 @@ class FlightSearchView(APIView):
                 return [p for p in parts if p]
             return None
 
+        # Prefer serializer-validated currency if your serializer supports it; otherwise fall back.
+        currency = params.get("currency") if isinstance(params, dict) else None
+        if currency is None:
+            currency = raw.get("currency")
+        currency = currency or None
+
         normalized_params = {
             **params,
             "departDate": params["departDate"].isoformat(),
@@ -52,24 +58,22 @@ class FlightSearchView(APIView):
             "allowedAirlines": _to_str_list(raw.get("allowedAirlines")),
         }
 
-        # Prefer serializer-validated currency if your serializer supports it; otherwise fall back.
-        currency = params.get("currency") if isinstance(params, dict) else None
-        if currency is None:
-            currency = raw.get("currency")
-        currency = currency or None
+        def _ck(v):
+            # Preserve 0/False-y values; only None becomes empty.
+            return "" if v is None else str(v)
 
         cache_key = (
             "flights:search:"
-            f"{normalized_params['origin']}:"
-            f"{normalized_params['destination']}:"
-            f"{normalized_params['departDate']}:"
-            f"{normalized_params.get('returnDate') or ''}:"
-            f"{normalized_params['adults']}:"
-            f"{normalized_params['cabin']}:"
-            f"{currency or ''}:"
-            f"{normalized_params.get('sort') or ''}:"
-            f"{normalized_params.get('limit') or ''}:"
-            f"{normalized_params.get('maxStops') or ''}:"
+            f"{_ck(normalized_params.get('origin'))}:"
+            f"{_ck(normalized_params.get('destination'))}:"
+            f"{_ck(normalized_params.get('departDate'))}:"
+            f"{_ck(normalized_params.get('returnDate'))}:"
+            f"{_ck(normalized_params.get('adults'))}:"
+            f"{_ck(normalized_params.get('cabin'))}:"
+            f"{_ck(currency)}:"
+            f"{_ck(normalized_params.get('sort'))}:"
+            f"{_ck(normalized_params.get('limit'))}:"
+            f"{_ck(normalized_params.get('maxStops'))}:"
             f"{','.join(normalized_params.get('allowedAirlines') or [])}"
         )
 

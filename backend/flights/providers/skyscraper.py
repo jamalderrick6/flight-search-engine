@@ -3,6 +3,8 @@ import logging
 import re
 import hashlib
 import json
+import time
+from datetime import datetime
 import requests
 from django.conf import settings
 from django.core.cache import cache
@@ -18,6 +20,9 @@ SKYSCRAPER_EVERYWHERE_URL = "https://flights-sky.p.rapidapi.com/flights/search-e
 # Google price graph endpoints (multi-day price series around the selected date)
 GOOGLE_PRICE_GRAPH_ONE_WAY_URL = "https://flights-sky.p.rapidapi.com/google/price-graph/for-one-way"
 GOOGLE_PRICE_GRAPH_ROUNDTRIP_URL = "https://flights-sky.p.rapidapi.com/google/price-graph/for-roundtrip"
+
+RESPONSE_CACHE_TTL = 60 * 5
+GRAPH_CACHE_TTL = 60 * 15
 
 
 
@@ -177,6 +182,35 @@ def _build_offer_curve(offers) -> list[dict]:
         if prev is None or price_total < prev:
             price_by_date[date_key] = float(price_total)
     return [{"date": d, "price": p} for d, p in sorted(price_by_date.items())]
+
+
+def _series_date_span_days(series: list[dict]) -> int:
+    dates = []
+    for point in series:
+        if not isinstance(point, dict):
+            continue
+        date_str = point.get("date")
+        if not isinstance(date_str, str):
+            continue
+        try:
+            dates.append(datetime.fromisoformat(date_str).date())
+        except ValueError:
+            continue
+    if len(dates) < 2:
+        return 0
+    return (max(dates) - min(dates)).days
+
+
+def _should_override_curve(offers_curve: list[dict], existing_curve: list[dict]) -> bool:
+    if len(offers_curve) < 2:
+        return False
+    if not existing_curve:
+        return True
+    if len(offers_curve) >= 5:
+        return True
+    if len(offers_curve) > len(existing_curve):
+        return _series_date_span_days(offers_curve) > _series_date_span_days(existing_curve)
+    return False
 
 
 def _google_curve_cache_key(params: dict) -> str:
@@ -627,9 +661,30 @@ class SkyScraperProvider(FlightProvider):
             "allowedAirlines": params.get("allowedAirlines"),
         }
         ck = _cache_key("flights:skyscraper", cache_payload)
-        cached = cache.get(ck)
-        if isinstance(cached, dict) and cached.get("offers") is not None:
-            return cached
+        now_ts = time.time()
+        bypass_cache = (
+            bool(params.get("allowedAirlines"))
+            or params.get("maxStops") is not None
+            or (params.get("limit") is not None and params.get("limit") != 50)
+            or (params.get("sort") not in (None, "cheapest"))
+        )
+        if not bypass_cache:
+            cached = cache.get(ck)
+            if isinstance(cached, dict):
+                payload = cached.get("payload") if "payload" in cached else cached
+                cached_at = cached.get("cached_at") if "payload" in cached else None
+                if isinstance(payload, dict) and payload.get("offers") is not None:
+                    meta = payload.get("meta")
+                    if isinstance(meta, dict):
+                        meta.update({
+                            "cached": True,
+                            "cacheAgeSeconds": int(now_ts - cached_at) if cached_at else None,
+                            "cacheTtlSeconds": RESPONSE_CACHE_TTL,
+                            "priceHistoryPoints": len(meta.get("priceHistory") or []),
+                            "priceHistorySource": meta.get("priceHistorySource", "none"),
+                            "priceHistoryFilterAware": meta.get("priceHistoryFilterAware", False),
+                        })
+                    return payload
 
         # --- Add roundtrip support ---
         query_params = {}
@@ -896,9 +951,14 @@ class SkyScraperProvider(FlightProvider):
             "stopsCounts": stops_counts,
             "priceHistory": [],
         }
+        price_history_source = "none"
+        price_history_filter_aware = False
+        price_history_cache_age = None
+        price_history_cache_ttl = None
+
         # --- Price graph precedence (Option C) ---
         # Primary: Google price-graph (multi-day series) for a real timeline.
-        # Secondary: offer-derived curve (responsive to filters) if it yields more than 1 point.
+        # Secondary: offer-derived curve (responsive to filters) when it is robust enough.
         # Fallback: search-everywhere quote history.
 
         departure_airport = _to_google_airport(params.get("origin"))
@@ -916,8 +976,20 @@ class SkyScraperProvider(FlightProvider):
         cached_curve = cache.get(curve_key)
 
         # 1) Try Google price-graph (cached)
-        if isinstance(cached_curve, list) and cached_curve:
+        if isinstance(cached_curve, dict) and isinstance(cached_curve.get("data"), list):
+            cached_series = cached_curve.get("data")
+            if cached_series:
+                meta["priceHistory"] = cached_series
+                price_history_source = "google_price_graph"
+                price_history_filter_aware = False
+                cached_at = cached_curve.get("cached_at")
+                price_history_cache_age = int(now_ts - cached_at) if cached_at else None
+                price_history_cache_ttl = GRAPH_CACHE_TTL
+        elif isinstance(cached_curve, list) and cached_curve:
             meta["priceHistory"] = cached_curve
+            price_history_source = "google_price_graph"
+            price_history_filter_aware = False
+            price_history_cache_ttl = GRAPH_CACHE_TTL
         else:
             try:
                 graph_query = {
@@ -939,16 +1011,26 @@ class SkyScraperProvider(FlightProvider):
 
                 if graph_series:
                     meta["priceHistory"] = graph_series
-                    cache.set(curve_key, graph_series, timeout=60 * 15)
+                    price_history_source = "google_price_graph"
+                    price_history_filter_aware = False
+                    cache.set(
+                        curve_key,
+                        {"data": graph_series, "cached_at": now_ts},
+                        timeout=GRAPH_CACHE_TTL,
+                    )
             except ProviderError:
                 # Don't fail the whole request if graph fails
                 pass
 
         # 2) Offer-derived curve (only if it provides a meaningful series)
         offers_curve = _build_offer_curve(offers_for_curve)
-        if len(offers_curve) >= 2:
+        if _should_override_curve(offers_curve, meta.get("priceHistory") or []):
             # Prefer offer-derived when it has real variance (feels "live" with filters)
             meta["priceHistory"] = offers_curve
+            price_history_source = "offers"
+            price_history_filter_aware = True
+            price_history_cache_age = None
+            price_history_cache_ttl = None
 
         # 3) Fallback to search-everywhere if we still have no curve
         if not meta["priceHistory"]:
@@ -978,32 +1060,21 @@ class SkyScraperProvider(FlightProvider):
                     params,
                 )
                 meta["priceHistory"] = price_history
-
-                graph_prices = [
-                    p["price"]
-                    for p in price_history
-                    if isinstance(p, dict) and isinstance(p.get("price"), (int, float))
-                ]
-                # Only fall back to graph min/max when we have no concrete offers.
-                if not offers and graph_prices:
-                    meta["minPrice"] = min(graph_prices)
-                    meta["maxPrice"] = max(graph_prices)
+                price_history_source = "search_everywhere"
+                price_history_filter_aware = False
             except ProviderError:
                 pass
 
-        # --- Keep meta min/max in sync with the curve when it exists ---
-        curve_prices = [
-            p.get("price")
-            for p in (meta.get("priceHistory") or [])
-            if isinstance(p, dict) and isinstance(p.get("price"), (int, float))
-        ]
-        if curve_prices:
-            # Min/max from offers already represent filtered list; curve can represent broader timeline.
-            # Ensure we have sane values even when offers are empty.
-            if meta.get("minPrice") is None:
-                meta["minPrice"] = min(curve_prices)
-            if meta.get("maxPrice") is None:
-                meta["maxPrice"] = max(curve_prices)
+        if not meta["priceHistory"]:
+            price_history_source = "none"
+            price_history_filter_aware = False
+        meta["priceHistorySource"] = price_history_source
+        meta["priceHistoryFilterAware"] = price_history_filter_aware
+        meta["priceHistoryPoints"] = len(meta.get("priceHistory") or [])
+        meta["cached"] = False
+        meta["cacheAgeSeconds"] = price_history_cache_age
+        meta["cacheTtlSeconds"] = price_history_cache_ttl
+
         result = {
             "query": query,
             "offers": offers,
@@ -1019,5 +1090,10 @@ class SkyScraperProvider(FlightProvider):
             except Exception:
                 pass
         # Cache for a short time to smooth repeated UI queries.
-        cache.set(ck, result, timeout=60 * 5)
+        if not bypass_cache:
+            cache.set(
+                ck,
+                {"payload": result, "cached_at": now_ts},
+                timeout=RESPONSE_CACHE_TTL,
+            )
         return result
