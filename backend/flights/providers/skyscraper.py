@@ -662,12 +662,8 @@ class SkyScraperProvider(FlightProvider):
         }
         ck = _cache_key("flights:skyscraper", cache_payload)
         now_ts = time.time()
-        bypass_cache = (
-            bool(params.get("allowedAirlines"))
-            or params.get("maxStops") is not None
-            or (params.get("limit") is not None and params.get("limit") != 50)
-            or (params.get("sort") not in (None, "cheapest"))
-        )
+        bypass_cache = bool(params.get("bypassCache"))
+
         if not bypass_cache:
             cached = cache.get(ck)
             if isinstance(cached, dict):
@@ -676,14 +672,16 @@ class SkyScraperProvider(FlightProvider):
                 if isinstance(payload, dict) and payload.get("offers") is not None:
                     meta = payload.get("meta")
                     if isinstance(meta, dict):
-                        meta.update({
-                            "cached": True,
-                            "cacheAgeSeconds": int(now_ts - cached_at) if cached_at else None,
-                            "cacheTtlSeconds": RESPONSE_CACHE_TTL,
-                            "priceHistoryPoints": len(meta.get("priceHistory") or []),
-                            "priceHistorySource": meta.get("priceHistorySource", "none"),
-                            "priceHistoryFilterAware": meta.get("priceHistoryFilterAware", False),
-                        })
+                        meta.update(
+                            {
+                                "cached": True,
+                                "cacheAgeSeconds": int(now_ts - cached_at) if cached_at else None,
+                                "cacheTtlSeconds": RESPONSE_CACHE_TTL,
+                                "priceHistoryPoints": len(meta.get("priceHistory") or []),
+                                "priceHistorySource": meta.get("priceHistorySource", "none"),
+                                "priceHistoryFilterAware": meta.get("priceHistoryFilterAware", False),
+                            }
+                        )
                     return payload
 
         # --- Add roundtrip support ---
@@ -943,6 +941,7 @@ class SkyScraperProvider(FlightProvider):
             "returnDate": params.get("returnDate"),
             "adults": params.get("adults"),
             "cabin": params.get("cabin"),
+            "currency": params.get("currency") or getattr(settings, "DEFAULT_CURRENCY", "USD"),
         }
         meta = {
             "minPrice": min_price,
