@@ -66,6 +66,7 @@ export default function SearchForm({
   onSubmit,
   isLoading,
 }: SearchFormProps) {
+  const [isCollapsed, setIsCollapsed] = useState(true)
   const roundTrip = Boolean(values.returnDate)
   const today = new Date()
   const todayIso = new Date(
@@ -184,7 +185,28 @@ export default function SearchForm({
         onSubmit()
       }}
     >
-      <div className="grid gap-3 sm:grid-cols-2">
+      <div className="flex items-center justify-between rounded-2xl border border-slate-200 bg-white/70 px-4 py-3 text-sm sm:hidden">
+        <div className="text-slate-600">
+          {values.origin && values.destination
+            ? `${values.origin} → ${values.destination}`
+            : "Set your route"}
+        </div>
+        <button
+          type="button"
+          className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-600"
+          aria-expanded={!isCollapsed}
+          aria-controls="search-form-fields"
+          onClick={() => setIsCollapsed((prev) => !prev)}
+        >
+          {isCollapsed ? "Edit" : "Hide"}
+        </button>
+      </div>
+
+      <div
+        id="search-form-fields"
+        className={`space-y-4 ${isCollapsed ? "hidden sm:block" : ""}`}
+      >
+        <div className="grid gap-3 sm:grid-cols-2">
         <div className="space-y-1">
           <label className="text-xs uppercase tracking-widest text-slate-500">
             Origin
@@ -298,9 +320,9 @@ export default function SearchForm({
             ) : null}
           </div>
         </div>
-      </div>
+        </div>
 
-      <div className="grid gap-3 sm:grid-cols-2">
+        <div className="grid gap-3 sm:grid-cols-2">
         <div className="space-y-1">
           <label className="text-xs uppercase tracking-widest text-slate-500">
             Depart
@@ -362,9 +384,9 @@ export default function SearchForm({
             />
           </div>
         </div>
-      </div>
+        </div>
 
-      <div className="grid gap-3 sm:grid-cols-3">
+        <div className="grid gap-3 sm:grid-cols-3">
         <div className="space-y-1">
           <label className="text-xs uppercase tracking-widest text-slate-500">
             Adults
@@ -406,16 +428,17 @@ export default function SearchForm({
             </select>
           </div>
         </div>
-      </div>
+        </div>
 
-      <button
-        type="submit"
-        className="inline-flex items-center gap-2 rounded-full bg-orange-500 px-6 py-2 text-sm font-semibold text-white shadow-lg shadow-orange-200 disabled:opacity-50 transition hover:bg-orange-400"
-        disabled={isLoading || !values.origin.trim() || !values.destination.trim()}
-      >
-        <SearchIcon fontSize="small" />
-        {isLoading ? "Searching..." : "Search flights"}
-      </button>
+        <button
+          type="submit"
+          className="inline-flex items-center gap-2 rounded-full bg-orange-500 px-6 py-2 text-sm font-semibold text-white shadow-lg shadow-orange-200 disabled:opacity-50 transition hover:bg-orange-400"
+          disabled={isLoading || !values.origin.trim() || !values.destination.trim()}
+        >
+          <SearchIcon fontSize="small" />
+          {isLoading ? "Searching..." : "Search flights"}
+        </button>
+      </div>
     </form>
   )
 }
